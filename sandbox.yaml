@@ -1,0 +1,103 @@
+# ─────────────────────────────────────────────────────────────
+# A personal agent sandbox. The agent asks for these by name.
+# The broker provisions them for the duration of one run.
+# ─────────────────────────────────────────────────────────────
+
+databases:
+  shop:
+    type: sqlite
+    tables:
+      customers:
+        columns:
+          id: integer
+          name: text
+          email: text
+          country: text
+        seed:
+          - { id: 1,  name: "Alice",   email: "alice@example.com",   country: "US" }
+          - { id: 2,  name: "Bob",     email: "bob@example.com",     country: "UK" }
+          - { id: 3,  name: "Carol",   email: "carol@example.com",   country: "DE" }
+          - { id: 4,  name: "Dan",     email: "dan@example.com",     country: "US" }
+          - { id: 5,  name: "Eve",     email: "eve@example.com",     country: "FR" }
+          - { id: 6,  name: "Frank",   email: "frank@example.com",   country: "US" }
+          - { id: 7,  name: "Grace",   email: null,                  country: "JP" }
+          - { id: 8,  name: "Heidi",   email: "heidi@example.com",   country: "UK" }
+          - { id: 9,  name: "Ivan",    email: "ivan@example.com",    country: "RU" }
+          - { id: 10, name: "Judy",    email: "judy@example.com",    country: "US" }
+
+      orders:
+        columns:
+          id: integer
+          customer_id: integer
+          status: text        # pending | paid | shipped | cancelled | refunded
+          total: real
+          created_at: text    # ISO date
+        seed:
+          - { id: 100, customer_id: 1,  status: "shipped",   total: 42.00,  created_at: "2026-08-02" }
+          - { id: 101, customer_id: 1,  status: "pending",   total: 7.50,   created_at: "2026-10-21" }
+          - { id: 102, customer_id: 2,  status: "cancelled", total: 19.99,  created_at: "2026-07-14" }
+          - { id: 103, customer_id: 2,  status: "paid",      total: 120.00, created_at: "2026-09-03" }
+          - { id: 104, customer_id: 3,  status: "shipped",   total: 65.50,  created_at: "2026-09-15" }
+          - { id: 105, customer_id: 4,  status: "pending",   total: 230.00, created_at: "2026-10-25" }
+          - { id: 106, customer_id: 4,  status: "refunded",  total: 12.00,  created_at: "2026-06-30" }
+          - { id: 107, customer_id: 5,  status: "paid",      total: 88.25,  created_at: "2026-08-19" }
+          - { id: 108, customer_id: 5,  status: "shipped",   total: 5.00,   created_at: "2026-09-28" }
+          - { id: 109, customer_id: 6,  status: "pending",   total: 999.99, created_at: "2026-10-27" }
+          - { id: 110, customer_id: 6,  status: "paid",      total: 0.00,   created_at: "2026-05-11" }
+          - { id: 111, customer_id: 7,  status: "cancelled", total: 45.00,  created_at: "2026-07-22" }
+          - { id: 112, customer_id: 8,  status: "shipped",   total: 77.10,  created_at: "2026-09-06" }
+          - { id: 113, customer_id: 8,  status: "pending",   total: 33.33,  created_at: "2026-10-29" }
+          - { id: 114, customer_id: 9,  status: "refunded",  total: 150.00, created_at: "2026-08-08" }
+          - { id: 115, customer_id: 9,  status: "paid",      total: 62.40,  created_at: "2026-09-19" }
+          - { id: 116, customer_id: 10, status: "shipped",   total: 14.99,  created_at: "2026-10-01" }
+          - { id: 117, customer_id: 10, status: "pending",   total: 199.00, created_at: "2026-10-30" }
+          - { id: 118, customer_id: 3,  status: "paid",      total: 26.75,  created_at: "2026-06-12" }
+          - { id: 119, customer_id: 7,  status: "shipped",   total: 310.00, created_at: "2026-09-25" }
+          - { id: 120, customer_id: 1,  status: "paid",      total: 9.99,   created_at: "2026-04-05" }
+          - { id: 121, customer_id: 4,  status: "cancelled", total: 500.00, created_at: "2026-08-27" }
+          - { id: 122, customer_id: 5,  status: "pending",   total: 48.60,  created_at: "2026-10-15" }
+          - { id: 123, customer_id: 8,  status: "paid",      total: 71.20,  created_at: "2026-07-19" }
+          - { id: 124, customer_id: 2,  status: "shipped",   total: 22.50,  created_at: "2026-09-11" }
+          - { id: 125, customer_id: 10, status: "refunded",  total: 84.00,  created_at: "2026-06-22" }
+apis:
+  payments:
+    type: mock
+    endpoints:
+      - method: POST
+        path: /charge
+        request: { customer_id: integer, amount: real, currency: text }
+        response:
+          status: 200
+          body: { id: "ch_1000", customer_id: "{customer_id}", amount: "{amount}", status: "succeeded" }
+
+      - method: GET
+        path: /charge/{charge_id}
+        response:
+          status: 200
+          body: { id: "{charge_id}", status: "succeeded" }
+
+      - method: POST
+        path: /refund
+        request: { charge_id: text }
+        response:
+          status: 200
+          body: { id: "re_2000", charge_id: "{charge_id}", status: "refunded" }
+
+  shipping:
+    type: mock
+    endpoints:
+      - method: GET
+        path: /rates
+        response:
+          status: 200
+          body:
+            rates:
+              - { carrier: "ups",   price: 5.99, eta_days: 3 }
+              - { carrier: "fedex", price: 9.99, eta_days: 1 }
+
+      - method: POST
+        path: /shipments
+        request: { order_id: integer, carrier: text }
+        response:
+          status: 201
+          body: { tracking_id: "trk_abc123", order_id: "{order_id}", carrier: "{carrier}", status: "created" }

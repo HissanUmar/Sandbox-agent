@@ -1,0 +1,10 @@
+# Sandbox runtime (your opensandbox.py)
+pyyaml>=6.0
+fastapi>=0.110
+uvicorn>=0.29
+requests>=2.31
+
+# Agent runtime (LangChain + tool calling)
+langchain-openai>=0.3.0
+langchain-core>=0.3.0
+python-dotenv>=1.0.0
