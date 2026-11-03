@@ -1,0 +1,126 @@
+databases:
+  shop:
+    type: sqlite
+    tables:
+      customers:
+        columns: { id: integer, name: text, email: text, country: text }
+        seed:
+          - { id: 1,  name: "Alice", email: "alice@example.com", country: "US" }
+          - { id: 2,  name: "Bob",   email: "bob@example.com",   country: "UK" }
+          - { id: 3,  name: "Carol", email: "carol@example.com", country: "DE" }
+          - { id: 4,  name: "Dan",   email: "dan@example.com",   country: "US" }
+          - { id: 5,  name: "Eve",   email: "eve@example.com",   country: "FR" }
+          - { id: 6,  name: "Frank", email: "frank@example.com", country: "US" }
+          - { id: 7,  name: "Grace", email: null,                country: "JP" }
+          - { id: 8,  name: "Heidi", email: "heidi@example.com", country: "UK" }
+          - { id: 9,  name: "Ivan",  email: "ivan@example.com",  country: "RU" }
+          - { id: 10, name: "Judy",  email: "judy@example.com",  country: "US" }
+
+      orders:
+        columns:
+          id: integer
+          customer_id: integer
+          status: text
+          total: real
+          created_at: text
+        seed:
+          - { id: 100, customer_id: 1,  status: "shipped",   total: 42.00,  created_at: "2026-08-02" }
+          - { id: 101, customer_id: 1,  status: "pending",   total: 7.50,   created_at: "2026-10-21" }
+          - { id: 102, customer_id: 2,  status: "cancelled", total: 19.99,  created_at: "2026-07-14" }
+          - { id: 103, customer_id: 2,  status: "paid",      total: 120.00, created_at: "2026-09-03" }
+          - { id: 104, customer_id: 3,  status: "shipped",   total: 65.50,  created_at: "2026-09-15" }
+          - { id: 105, customer_id: 4,  status: "pending",   total: 230.00, created_at: "2026-10-25" }
+          - { id: 106, customer_id: 4,  status: "refunded",  total: 12.00,  created_at: "2026-06-30" }
+          - { id: 107, customer_id: 5,  status: "paid",      total: 88.25,  created_at: "2026-08-19" }
+          - { id: 108, customer_id: 5,  status: "shipped",   total: 5.00,   created_at: "2026-09-28" }
+          - { id: 109, customer_id: 6,  status: "pending",   total: 999.99, created_at: "2026-10-27" }
+          - { id: 110, customer_id: 6,  status: "paid",      total: 0.00,   created_at: "2026-05-11" }
+          - { id: 111, customer_id: 7,  status: "cancelled", total: 45.00,  created_at: "2026-07-22" }
+          - { id: 112, customer_id: 8,  status: "shipped",   total: 77.10,  created_at: "2026-09-06" }
+          - { id: 113, customer_id: 8,  status: "pending",   total: 33.33,  created_at: "2026-10-29" }
+          - { id: 114, customer_id: 9,  status: "refunded",  total: 150.00, created_at: "2026-08-08" }
+          - { id: 115, customer_id: 9,  status: "paid",      total: 62.40,  created_at: "2026-09-19" }
+          - { id: 116, customer_id: 10, status: "shipped",   total: 14.99,  created_at: "2026-10-01" }
+          - { id: 117, customer_id: 10, status: "pending",   total: 199.00, created_at: "2026-10-30" }
+          - { id: 118, customer_id: 3,  status: "paid",      total: 26.75,  created_at: "2026-06-12" }
+          - { id: 119, customer_id: 7,  status: "shipped",   total: 310.00, created_at: "2026-09-25" }
+          - { id: 120, customer_id: 1,  status: "paid",      total: 9.99,   created_at: "2026-04-05" }
+          - { id: 121, customer_id: 4,  status: "cancelled", total: 500.00, created_at: "2026-08-27" }
+          - { id: 122, customer_id: 5,  status: "pending",   total: 48.60,  created_at: "2026-10-15" }
+          - { id: 123, customer_id: 8,  status: "paid",      total: 71.20,  created_at: "2026-07-19" }
+          - { id: 124, customer_id: 2,  status: "shipped",   total: 22.50,  created_at: "2026-09-11" }
+          - { id: 125, customer_id: 10, status: "refunded",  total: 84.00,  created_at: "2026-06-22" }
+
+      # new: payments table, so charges persist
+      charges:
+        columns: { id: text, customer_id: integer, amount: real, currency: text, status: text, created_at: text }
+        seed: []
+
+      # new: shipments table
+      shipments:
+        columns: { tracking_id: text, order_id: integer, carrier: text, status: text, created_at: text }
+        seed: []
+
+apis:
+  orders:
+    type: sql
+    database: shop
+    endpoints:
+      - method: GET
+        path: /orders
+        params:
+          status: { type: text, required: false }
+        sql: "SELECT id, customer_id, status, total, created_at FROM orders WHERE status = COALESCE(?, status)"
+        on_success: { status: 200, body: "{rows}" }
+
+      - method: POST
+        path: /orders/{id}/cancel
+        params:
+          id: { type: integer, required: true, min: 1, source: path }
+        sql: "UPDATE orders SET status = 'cancelled' WHERE id = ? AND status IN ('pending','paid')"
+        on_success: { status: 200, body: { ok: true } }
+        on_not_found: { status: 404, body: { error: "not_found", message: "Order {id} does not exist" } }
+        on_conflict: { status: 409, body: { error: "invalid_state", message: "Order {id} is not cancellable" } }
+        on_invalid: { status: 400, body: { error: "invalid_input" } }
+
+  payments:
+    type: sql
+    database: shop
+    endpoints:
+      - method: POST
+        path: /charge
+        params:
+          customer_id: { type: integer, required: true, source: body }
+          amount:      { type: real,    required: true, source: body }
+          currency:    { type: text,    required: true, source: body }
+        sql: "INSERT INTO charges (id, customer_id, amount, currency, status, created_at) VALUES ('ch_' || lower(hex(randomblob(4))), ?, ?, ?, 'succeeded', date('now')) RETURNING id, customer_id, amount, status"
+        on_success: { status: 200, body: "{rows[0]}" }
+        on_invalid: { status: 400, body: { error: "invalid_input" } }
+
+      - method: POST
+        path: /refund
+        params:
+          charge_id: { type: text, required: true, source: body }
+        sql: "UPDATE charges SET status='refunded' WHERE id = ? AND status='succeeded'"
+        on_success: { status: 200, body: { ok: true } }
+        on_not_found: { status: 404, body: { error: "not_found" } }
+        on_conflict: { status: 409, body: { error: "not_refundable" } }
+        on_invalid: { status: 400, body: { error: "invalid_input" } }
+
+  shipping:
+    type: sql
+    database: shop
+    endpoints:
+      - method: GET
+        path: /rates
+        sql: "SELECT 'ups' AS carrier, 5.99 AS price, 3 AS eta_days UNION ALL SELECT 'fedex', 9.99, 1"
+        on_success: { status: 200, body: { rates: "{rows}" } }
+
+      - method: POST
+        path: /shipments
+        params:
+          order_id: { type: integer, required: true, source: body }
+          carrier:  { type: text,    required: true, source: body }
+        sql: "INSERT INTO shipments (tracking_id, order_id, carrier, status, created_at) VALUES ('trk_' || lower(hex(randomblob(4))), ?, ?, 'created', date('now')) RETURNING tracking_id, order_id, carrier, status"
+        on_success: { status: 201, body: "{rows[0]}" }
+        on_invalid: { status: 400, body: { error: "invalid_input" } }

@@ -1,10 +1,13 @@
-# Sandbox runtime (your opensandbox.py)
+# ── Plumbing: opensandbox.py ────────────────────────────────
 pyyaml>=6.0
 fastapi>=0.110
 uvicorn>=0.29
 requests>=2.31
 
-# Agent runtime (LangChain + tool calling)
+# ── Plumbing: sql_tool.py ───────────────────────────────────
+sqlglot>=25.0
+
+# ── Agentic: agent.py ───────────────────────────────────────
 langchain-openai>=0.3.0
 langchain-core>=0.3.0
 python-dotenv>=1.0.0
