@@ -3,7 +3,8 @@ databases:
     type: sqlite
     tables:
       customers:
-        columns: { id: integer, name: text, email: text, country: text }
+        columns: { id: {integer, primary_key: true},
+         name: text, email: text, country: text }
         seed:
           - { id: 1,  name: "Alice", email: "alice@example.com", country: "US" }
           - { id: 2,  name: "Bob",   email: "bob@example.com",   country: "UK" }
@@ -18,8 +19,8 @@ databases:
 
       orders:
         columns:
-          id: integer
-          customer_id: integer
+          id: { type: integer, primary_key: true }
+          customer_id: { type: integer, references: customers.id }
           status: text
           total: real
           created_at: text
@@ -53,12 +54,25 @@ databases:
 
       # new: payments table, so charges persist
       charges:
-        columns: { id: text, customer_id: integer, amount: real, currency: text, status: text, created_at: text }
+        columns: {
+          id: { type: text, primary_key: true },
+          customer_id: { type: integer, references: customers.id },
+          amount: real,
+          currency: text, 
+          status: text, 
+          created_at: text  
+        }
         seed: []
 
       # new: shipments table
       shipments:
-        columns: { tracking_id: text, order_id: integer, carrier: text, status: text, created_at: text }
+        columns: {
+          tracking_id: { type: text, primary_key: true },
+          order_id: { type: integer, references: orders.id },
+          carrier: text,
+          status: text,
+          created_at: text
+        }
         seed: []
 
 apis:

@@ -5,6 +5,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import uvicorn, threading, socket, time
 
+from .validate import validate, ConfigError
+
 
 def _free_port():
     s = socket.socket(); s.bind(("127.0.0.1", 0))
@@ -13,6 +15,7 @@ def _free_port():
 
 def _run_sql(db_path, sql, params):
     conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA foreign_keys = ON") 
     try:
         cur = conn.execute(sql, params)
         cols = [d[0] for d in cur.description] if cur.description else []
@@ -23,6 +26,25 @@ def _run_sql(db_path, sql, params):
     finally:
         conn.close()
 
+def _build_create_table(tbl, tcfg):
+    col_defs = []
+    fk_defs = []
+    for cname, cspec in tcfg["columns"].items():
+        if isinstance(cspec, str):
+            ctype, pk, ref = cspec, False, None
+        else:
+            ctype = cspec.get("type", "text")
+            pk = cspec.get("primary_key", False)
+            ref = cspec.get("references")
+        parts = [cname, ctype]
+        if pk:
+            parts.append("PRIMARY KEY")
+        col_defs.append(" ".join(parts))
+        if ref:
+            target_tbl, target_col = ref.split(".")
+            fk_defs.append(f"FOREIGN KEY ({cname}) REFERENCES {target_tbl}({target_col})")
+    body = ", ".join(col_defs + fk_defs)
+    return f"CREATE TABLE {tbl} ({body})"
 
 def _check_params(ep, request):
     """Validate declared params against the request. Returns (values, error)."""
@@ -84,6 +106,16 @@ def _substitute(obj, params):
         return [_substitute(v, params) for v in obj]
     return obj
 
+def _cleanup(run_dir):
+    import time, shutil
+    for attempt in range(3):
+        try:
+            shutil.rmtree(run_dir)
+            return
+        except Exception:
+            time.sleep(0.2)
+    print(f"[sandbox] warning: leaked {run_dir}")
+
 
 class Sandbox:
     def __init__(self, config):
@@ -92,7 +124,12 @@ class Sandbox:
     @classmethod
     def from_file(cls, path):
         with open(path) as f:
-            return cls(yaml.safe_load(f))
+            config = yaml.safe_load(f)
+        try:
+            validate(config)
+        except ConfigError as e:
+            raise ConfigError(f"{path}: {e}") from None
+        return cls(config)
 
     @contextlib.contextmanager
     def run(self):
@@ -104,13 +141,18 @@ class Sandbox:
             for name, dbcfg in (self.config.get("databases") or {}).items():
                 db_path = os.path.join(run_dir, f"{name}.db")
                 conn = sqlite3.connect(db_path)
-                for tbl, t in dbcfg["tables"].items():
-                    cols = ", ".join(f"{c} {typ}" for c, typ in t["columns"].items())
-                    conn.execute(f"CREATE TABLE {tbl} ({cols})")
-                    for row in t.get("seed", []):
-                        placeholders = ", ".join("?" * len(row))
-                        conn.execute(f"INSERT INTO {tbl} VALUES ({placeholders})", list(row.values()))
-                conn.commit(); conn.close()
+                conn.execute("PRAGMA foreign_keys = ON")
+                try:
+                    for tbl, t in dbcfg["tables"].items():
+                        conn.execute(_build_create_table(tbl, t))
+                        for row in t.get("seed", []):
+                            placeholders = ", ".join("?" * len(row))
+                            conn.execute(f"INSERT INTO {tbl} VALUES ({placeholders})", list(row.values()))
+                    conn.commit()
+                
+                finally:
+                    conn.close()
+
                 # NOTE: SB_DB_* is intentionally NOT exported. The agent sees only APIs.
 
             # ── apis ─────────────────────────────────────────────
@@ -130,8 +172,14 @@ class Sandbox:
             os.environ.update(env)
             yield env
         finally:
-            for s in servers: s.should_exit = True
-            shutil.rmtree(run_dir, ignore_errors=True)
+            for s in servers:
+                s.should_exit = True
+            time.sleep(0.1)
+            try:
+                shutil.rmtree(run_dir)
+            except Exception as e:
+                print(f"[sandbox] warning: could not remove {run_dir}: {e}")
+
 
     # ── SQL-backed APIs ──────────────────────────────────────────
     def _build_sql_app(self, apicfg, db_path):
