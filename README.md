@@ -1,91 +1,129 @@
-# Local Agent Sandbox
+# Sandbox Agent
 
-A local sandbox for testing AI agents against **real databases** and **real HTTP APIs** — no mocks, no hardcoded responses. 
+> **A declarative environment builder for tool-using AI agents.**
 
-The agent sees only the API surface; the database lives behind it.
+Describe a business environment in YAML — tables, seed data, API endpoints — and the framework provisions real databases and real HTTP services, hands the agent a set of tools that talk to those services, and grades the agent on the resulting database state rather than on its prose.
 
----
-
-## What this is
-
-An agent's environment is provisioned from a single YAML file at run time:
-
-- **Databases** — SQLite files, created and seeded fresh on every run.
-- **APIs** — FastAPI services that execute declared SQL against those databases.
-- **Tools** — LangChain tools that call the APIs over HTTP.
-
-Every run starts from the same seed, writes persist for the duration of the run, and everything is torn down on exit. The agent never holds a database connection — it calls `POST /orders/101/cancel` and the API does the rest.
+**No mocks. No hardcoded responses.** The agent never touches the database; it calls HTTP APIs, and the APIs read and write real state.
 
 ---
 
-## Structure
+## Table of Contents
+
+- [Overview](#overview)
+- [Project Architecture](#project-architecture)
+- [Getting Started](#getting-started)
+  - [Installation & Setup](#installation--setup)
+- [How the Sandbox Works](#how-the-sandbox-works)
+  - [Lifecycle](#lifecycle)
+  - [Endpoint Specification](#endpoint-specification)
+  - [Configuration Validation](#configuration-validation)
+- [Defining an Environment](#defining-an-environment)
+- [Execution & Grading](#execution--grading)
+  - [Running the Agent](#running-the-agent)
+  - [State-Based Grading](#state-based-grading)
+  - [Running the Test Suite](#running-the-test-suite)
+- [Included Domains](#included-domains)
+- [Known Limitations](#known-limitations)
+- [Roadmap](#roadmap)
+- [Design Principles](#design-principles)
+
+---
+
+## Overview
+
+Most agent harnesses test against fixtures: a fake tool returns a canned string, and the agent's output is compared to an expected text string. That works for toy tasks but fails for stateful workflows because the agent never has to reason about **consequences**.
+
+Sandbox Agent takes the opposite approach. Each run provisions:
+- **SQLite databases**, created and seeded fresh from YAML declarations.
+- **FastAPI services** whose endpoints execute declared SQL statements against those databases (e.g., `POST /orders/101/cancel` executes `UPDATE orders SET status='cancelled' WHERE id = ?`).
+- **LangChain tools** that talk to those services over HTTP. The agent sees only `SB_API_*` handles and never receives direct `SB_DB_*` connection access.
+
+When the run finishes, everything is torn down. Every run starts from the same deterministic seed, writes persist for the run duration, and no state survives outside `sb.run()`.
+
+---
+
+## Project Architecture
 
 ```text
-.
-├── run_agent.py          # Entry point
-├── agent.py              # LLM + ReAct loop + system prompt
-├── agent_tools.py        # Tools the agent can call
-├── sandbox.py            # Provisioner: YAML → DB + APIs
-├── pipeline/
-│   └── sandbox.yaml      # The world: tables, seeds, endpoints
+Sandbox-agent/
+├── run_agent.py          # Entry point: --env shop|hospital, task string
+├── agent.py              # Generic ReAct loop; takes tools + prompt
+├── grade.py              # State-based grader for a given task file
+├── test_sandbox.py       # Core stack integration tests
 ├── requirements.txt
-└── .env
+├── .env
+│
+├── pipeline/             # Generic execution engine (no domain logic)
+│   ├── __init__.py       # Exports Sandbox, validate, ConfigError
+│   ├── sandbox.py        # Provisioner: YAML -> DBs + APIs + lifecycle
+│   ├── validate.py       # Pure configuration validator
+│   └── test_sandbox.py   # Core unit tests (run via python -m pipeline.test_sandbox)
+│
+├── environments/         # Business domain definitions
+│   ├── shop/
+│   │   ├── sandbox.yaml  # Schema, seed data, endpoints
+│   │   ├── tools.py      # Agent tool definitions
+│   │   ├── _runtime.py   # Runtime helpers (configure, api_url, call)
+│   │   └── prompt.md     # Domain-specific system prompt
+│   └── hospital/
+│       ├── sandbox.yaml
+│       ├── tools.py
+│       ├── _runtime.py
+│       └── prompt.md
+│
+├── tasks/                # Ground-truth task assertions
+│   ├── shop/
+│   │   └── cancel_order.yaml
+│   └── hospital/
+│       └── schedule_appointment.yaml
+│
+└── docs/                 # Design documentation & checklists
+    ├── aggregate_endpoint.md
+    ├── stabilization_checklist.md
+    └── v2_acceptance_checks.md
 ```
+
+> **Architecture Boundary:** `pipeline/` manages SQLite, HTTP, and SQL, and is agnostic to the LLM. `agent.py` handles the LLM and the ReAct reasoning loop without knowing tool implementations. `run_agent.py` ties both layers together.
 
 ---
 
-## Setup
+## Getting Started
 
-```bash
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-```
+### Installation & Setup
 
-### Configuration (`.env`)
+1. **Set up a Python virtual environment:**
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate          # Windows: .venv\Scripts\activate
+   pip install -r requirements.txt
+   ```
 
-```bash
-OLLAMA_BASE_URL=https://<your-tunnel>.trycloudflare.com
-OLLAMA_MODEL=qwen3:4b-instruct-2507-q4_K_M
-OLLAMA_API_KEY=ollama
-```
-
-> **Note:** The LLM endpoint is an Ollama instance exposed through a Cloudflare tunnel (see `Colab_Ollama.ipynb`). The tunnel URL changes on every restart.
-
----
-
-## Run
-
-```bash
-python run_agent.py "Cancel order 101, then list pending orders"
-```
-
-### Expected trace:
-
-```text
-sandbox up: {'SB_API_ORDERS': 'http://127.0.0.1:...', 'SB_API_PAYMENTS': '...', 'SB_API_SHIPPING': '...'}
-[tool] cancel_order({'order_id': 101}) -> {'ok': True}
-[tool] list_orders({'status': 'pending'}) -> [ ...5 rows, 101 absent... ]
-=== FINAL === Order 101 cancelled. Pending orders: ...
-```
-
-The absence of 101 in the second call is the point: the write persisted to the real database, and the read saw it.
+2. **Configure Environment Variables (`.env`):**
+   ```env
+   OLLAMA_BASE_URL=https://<your-tunnel>.trycloudflare.com
+   OLLAMA_MODEL=qwen3:4b-instruct-2507-q4_K_M
+   OLLAMA_API_KEY=ollama
+   ```
+   *Note: Update `.env` whenever your Cloudflare tunnel endpoint changes.*
 
 ---
 
-## How the sandbox works
+## How the Sandbox Works
 
-`sandbox.py` reads `pipeline/sandbox.yaml` and, inside `with sb.run()`:
+### Lifecycle
 
-1. Creates a temp directory for the run.
-2. For each `databases:` entry — creates a SQLite file, runs `CREATE TABLE` from `columns:`, inserts `seed:` rows.
-3. For each `apis:` entry with `type: sql` — starts a FastAPI server on a random port. Each endpoint's `sql:` is executed against the database named in `database:`.
-4. Exports `SB_API_*` handles into the environment. `SB_DB_*` is never exported — the agent has no database handle.
-5. On exit — shuts down the servers and deletes the temp directory.
+Inside the `with sb.run():` block, `sandbox.py` parses `environments/<name>/sandbox.yaml` and performs the following:
 
----
+1. **Directory Isolation:** Creates a run-specific temporary directory (`self._run_dir`).
+2. **Database Provisioning:** Reads `databases:`, creates SQLite database files, runs `CREATE TABLE` commands, and inserts seed data. Enforces relational integrity (`PRAGMA foreign_keys = ON`).
+3. **Service Provisioning:** Reads `apis:`, launches FastAPI instances on random free ports, and maps endpoints to SQL statements binding parameters positionally (`?`).
+4. **Handle Export:** Exports `SB_API_*` endpoints into environment variables while hiding database connection paths.
+5. **Teardown:** On exit, stops servers, releases sockets, and purges temporary directories regardless of run success or failure.
 
-## Endpoint format
+### Endpoint Specification
+
+Endpoints are declared declaratively in `sandbox.yaml`:
 
 ```yaml
 - method: POST
@@ -99,59 +137,114 @@ The absence of 101 in the second call is the point: the write persisted to the r
   on_invalid:   { status: 400, body: { error: "invalid_input" } }
 ```
 
-- **`params`** — Validated before SQL runs. `source` is path, query, or body.
-- **`sql`** — One statement. `?` placeholders bind in declaration order.
-- **`on_success` / `on_not_found` / `on_conflict` / `on_invalid`** — Chosen by affected rows and validation outcome.
-- **`body: "{rows}"`** returns the row list; **`"{rows[0]}"`** returns the first row.
+- **`params`**: Parameter requirements (`type`, `source`, `required`, `min`) validated prior to SQL execution.
+- **`sql`**: SQL statement with parameter placeholders (`?`).
+- **Outcomes**: Mapped response shapes (`on_success`, `on_not_found`, `on_conflict`, `on_invalid`) selected by database state and execution results.
+
+### Configuration Validation
+
+Run strict schema and placeholder checking using `pipeline/validate.py`:
+
+```bash
+python pipeline/validate.py environments/shop/sandbox.yaml
+```
+
+Validation checks for structural integrity, placeholder counts matching parameter definitions, seed column consistency, and endpoint-to-database references.
 
 ---
 
-## What the agent can do
+## Defining an Environment
 
-| Tool | Endpoint | Effect |
-| :--- | :--- | :--- |
-| `list_orders(status)` | `GET /orders` | Reads `orders` |
-| `cancel_order(id)` | `POST /orders/{id}/cancel` | Writes `orders.status` |
-| `charge_customer(id, amount, currency)` | `POST /payments/charge` | Inserts into `charges` |
-| `refund_charge(charge_id)` | `POST /payments/refund` | Writes `charges.status` |
-| `get_shipping_rates()` | `GET /shipping/rates` | Static rates |
-| `create_shipment(order_id, carrier)` | `POST /shipping/shipments` | Inserts into `shipments` |
+An environment is defined by four core files in `environments/<domain_name>/`:
+
+1. **`sandbox.yaml`**: Environment schema, seed records, foreign keys, API routes, SQL queries, and response shapes.
+2. **`tools.py`**: LangChain tool wrappers decorated with `@tool` that interface with endpoint URLs via runtime helpers.
+3. **`_runtime.py`**: Per-environment helper module (`configure`, `api_url`, `call`).
+4. **`prompt.md`**: Domain context and system instructions for the LLM agent.
 
 ---
 
-## Known limitations
+## Execution & Grading
 
-- **No `run_sql`:** The agent can only answer questions the endpoints support. Adding a question means adding an endpoint.
-- **Error bodies keep literal placeholders:** `"Order {id} does not exist"` is sent as-is; `{id}` is not substituted. (Cosmetic)
-- **404 and 409 are not distinguished for write endpoints:** A shipped order and a missing order both return 404. (Accepted)
-- **Positional `?` binding:** Declared params and SQL placeholders must be in the same order. Multi-param endpoints with repeated placeholders will break with a "bindings" error.
-- **No baseline diff:** You can inspect final state, but not "what changed from the seed."
+### Running the Agent
+
+To launch an agent on a natural language task:
+
+```bash
+python run_agent.py "Cancel order 101, then list pending orders." --env shop
+```
+
+### State-Based Grading
+
+Rather than parsing agent responses, task success is verified directly against the database state after execution:
+
+```bash
+python grade.py tasks/shop/cancel_order.yaml
+```
+
+**Task Spec Example (`tasks/shop/cancel_order.yaml`):**
+```yaml
+name: cancel_order_101
+env: shop
+db: shop
+input: "Cancel order 101."
+expected_state:
+  orders:
+    - id: 101
+      status: cancelled
+```
+
+### Running the Test Suite
+
+```bash
+# Core pipeline integration tests
+python -m pipeline.test_sandbox
+
+# Shop domain verification
+python grade.py tasks/shop/cancel_order.yaml
+
+# Hospital domain verification
+python grade.py tasks/hospital/schedule_appointment.yaml
+```
 
 ---
 
-## Testing
+## Included Domains
 
-Grade the agent's answers against known ground truth. Current seed supports, among others:
+### Shop Domain (`environments/shop/`)
+- **Tables**: `customers`, `orders`, `charges`, `shipments`.
+- **Tools**: `list_orders`, `cancel_order`, `charge_customer`, `refund_charge`, `get_shipping_rates`, `create_shipment`.
 
-| Task | Expected |
-| :--- | :--- |
-| **List cancelled orders** | `102, 111, 121` |
-| **Total value of shipped orders** | `537.09` |
-| **Customers per country** | `US=4, UK=2, DE=FR=JP=RU=1` |
-| **Orders from UK customers** | `102, 103, 112, 113, 123, 124` |
-| **Cancel 101 then list pending** | `5 rows (101 absent)` |
-
-Save traces to `runs/` and diff against them after any change to `sandbox.yaml` or `sandbox.py`.
+### Hospital Domain (`environments/hospital/`)
+- **Tables**: `departments`, `doctors`, `patients`, `appointments`.
+- **Tools**: `list_doctors`, `schedule_appointment`, `cancel_appointment`.
 
 ---
 
-## Architecture
+## Known Limitations
 
-Two pipelines, one boundary:
+- **No Arbitrary SQL**: Agent capabilities are limited to explicitly declared endpoints.
+- **Positional Bindings**: Dual use of a single parameter requires declaring multiple `?` placeholders and bindings.
+- **Dormant `on_conflict`**: Write operations cannot distinguish zero-row updates without dedicated precheck endpoints.
+- **Environment Isolation**: Subprocess environment variables (`SB_API_*`) restrict execution to a single concurrent sandbox per process.
+- **Host Process Scope**: Sandboxes run directly on host processes without container isolation.
 
-- **Plumbing** — `sandbox.yaml`, `sandbox.py`, `agent_tools.py`. Knows about SQLite, HTTP, and SQL. Does not know the LLM exists.
-- **Agentic** — `agent.py`. Knows about the LLM, the ReAct loop, and the prompt. Imports `TOOLS` from the plumbing; does not know how they are implemented.
+---
 
-`run_agent.py` is the only file that imports both. It is also the only file that changes when the delivery surface changes (script → CLI → HTTP broker).
+## Roadmap
 
-The agent is constrained by the API contract, not by a gate. There is no SQL validator because the agent does not write SQL. Every action is a declared endpoint; every failure is a status code.
+- [x] **V2**: Core abstraction for arbitrary multi-domain expansion and database-state assertions.
+- [ ] **V3**: Containerization, process resource limits, non-polluting configuration pass-through, and concurrent environment execution.
+- [ ] **V4**: Automated benchmark evaluation suites across multiple model architectures.
+- [ ] **V5**: Developer tools (CLI, OpenAPI/JSON-Schema export, MCP server interface).
+
+---
+
+## Design Principles
+
+1. **Configuration-driven**: Domain specifics are declared in code-free YAML configurations.
+2. **Generic Core**: `pipeline/` contains zero business domain assumptions.
+3. **Real State**: Real state transitions against real SQLite databases over HTTP endpoints.
+4. **Controlled Capabilities**: Agents act strictly through structured endpoints rather than raw database queries.
+5. **Reproducibility**: Runs start deterministically from identical seed states.
+6. **State Over Prose**: Evaluation measures actual system state changes rather than LLM text output.
