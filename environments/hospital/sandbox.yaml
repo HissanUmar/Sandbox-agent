@@ -1,0 +1,87 @@
+databases:
+  hospital:
+    type: sqlite
+    tables:
+      departments:
+        columns:
+          id: { type: integer, primary_key: true }
+          name: text
+        seed:
+          - { id: 1, name: "Cardiology" }
+          - { id: 2, name: "Neurology" }
+          - { id: 3, name: "Pediatrics" }
+
+      doctors:
+        columns:
+          id: { type: integer, primary_key: true }
+          name: text
+          department_id: { type: integer, references: departments.id }
+        seed:
+          - { id: 1, name: "Dr. Chen",   department_id: 1 }
+          - { id: 2, name: "Dr. Patel",  department_id: 1 }
+          - { id: 3, name: "Dr. Okafor", department_id: 2 }
+          - { id: 4, name: "Dr. Silva",  department_id: 3 }
+
+      patients:
+        columns:
+          id: { type: integer, primary_key: true }
+          name: text
+          age: integer
+        seed:
+          - { id: 1, name: "Maya",  age: 34 }
+          - { id: 2, name: "Jonas", age: 58 }
+          - { id: 3, name: "Aiko",  age: 7 }
+
+      appointments:
+        columns:
+          id: { type: integer, primary_key: true }
+          patient_id: { type: integer, references: patients.id }
+          doctor_id: { type: integer, references: doctors.id }
+          time: text
+          status: text
+        seed:
+          - { id: 1, patient_id: 1, doctor_id: 1, time: "2026-11-05T09:00", status: "scheduled" }
+          - { id: 2, patient_id: 2, doctor_id: 3, time: "2026-11-05T10:00", status: "scheduled" }
+
+apis:
+  hospital:
+    type: sql
+    database: hospital
+    endpoints:
+      - method: GET
+        path: /doctors
+        params:
+          available_at: { type: text, required: true, source: query }
+        sql: >
+          SELECT d.id, d.name, d.department_id
+          FROM doctors d
+          WHERE NOT EXISTS (
+            SELECT 1 FROM appointments a
+            WHERE a.doctor_id = d.id
+              AND a.time = ?
+              AND a.status != 'cancelled'
+          )
+        on_success: { status: 200, body: "{rows}" }
+
+      - method: POST
+        path: /appointments
+        params:
+          patient_id: { type: integer, required: true, source: body }
+          doctor_id:  { type: integer, required: true, source: body }
+          time:       { type: text,    required: true, source: body }
+        sql: >
+          INSERT INTO appointments (id, patient_id, doctor_id, time, status)
+          VALUES ((SELECT COALESCE(MAX(id),0)+1 FROM appointments), ?, ?, ?, 'scheduled')
+          RETURNING id, patient_id, doctor_id, time, status
+        on_success: { status: 201, body: "{rows[0]}" }
+        on_invalid: { status: 400, body: { error: "invalid_input" } }
+
+      - method: POST
+        path: /appointments/{id}/cancel
+        params:
+          id: { type: integer, required: true, min: 1, source: path }
+        sql: "UPDATE appointments SET status='cancelled' WHERE id = ? AND status='scheduled'"
+        on_success: { status: 200, body: { ok: true } }
+        on_not_found: { status: 404, body: { error: "not_found" } }
+        on_conflict: { status: 409, body: { error: "not_cancellable" } }
+        on_invalid: { status: 400, body: { error: "invalid_input" } }

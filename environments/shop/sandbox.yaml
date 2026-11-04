@@ -3,8 +3,11 @@ databases:
     type: sqlite
     tables:
       customers:
-        columns: { id: {integer, primary_key: true},
-         name: text, email: text, country: text }
+        columns:
+          id: { type: integer, primary_key: true }
+          name: text
+          email: text
+          country: text
         seed:
           - { id: 1,  name: "Alice", email: "alice@example.com", country: "US" }
           - { id: 2,  name: "Bob",   email: "bob@example.com",   country: "UK" }
@@ -52,27 +55,23 @@ databases:
           - { id: 124, customer_id: 2,  status: "shipped",   total: 22.50,  created_at: "2026-09-11" }
           - { id: 125, customer_id: 10, status: "refunded",  total: 84.00,  created_at: "2026-06-22" }
 
-      # new: payments table, so charges persist
       charges:
-        columns: {
-          id: { type: text, primary_key: true },
-          customer_id: { type: integer, references: customers.id },
-          amount: real,
-          currency: text, 
-          status: text, 
-          created_at: text  
-        }
+        columns:
+          id: { type: text, primary_key: true }
+          customer_id: { type: integer, references: customers.id }
+          amount: real
+          currency: text
+          status: text
+          created_at: text
         seed: []
 
-      # new: shipments table
       shipments:
-        columns: {
-          tracking_id: { type: text, primary_key: true },
-          order_id: { type: integer, references: orders.id },
-          carrier: text,
-          status: text,
+        columns:
+          tracking_id: { type: text, primary_key: true }
+          order_id: { type: integer, references: orders.id }
+          carrier: text
+          status: text
           created_at: text
-        }
         seed: []
 
 apis:
@@ -83,7 +82,7 @@ apis:
       - method: GET
         path: /orders
         params:
-          status: { type: text, required: false }
+          status: { type: text, required: false, source: query }
         sql: "SELECT id, customer_id, status, total, created_at FROM orders WHERE status = COALESCE(?, status)"
         on_success: { status: 200, body: "{rows}" }
 
@@ -107,7 +106,10 @@ apis:
           customer_id: { type: integer, required: true, source: body }
           amount:      { type: real,    required: true, source: body }
           currency:    { type: text,    required: true, source: body }
-        sql: "INSERT INTO charges (id, customer_id, amount, currency, status, created_at) VALUES ('ch_' || lower(hex(randomblob(4))), ?, ?, ?, 'succeeded', date('now')) RETURNING id, customer_id, amount, status"
+        sql: >
+          INSERT INTO charges (id, customer_id, amount, currency, status, created_at)
+          VALUES ('ch_' || lower(hex(randomblob(4))), ?, ?, ?, 'succeeded', date('now'))
+          RETURNING id, customer_id, amount, status
         on_success: { status: 200, body: "{rows[0]}" }
         on_invalid: { status: 400, body: { error: "invalid_input" } }
 
@@ -135,6 +137,9 @@ apis:
         params:
           order_id: { type: integer, required: true, source: body }
           carrier:  { type: text,    required: true, source: body }
-        sql: "INSERT INTO shipments (tracking_id, order_id, carrier, status, created_at) VALUES ('trk_' || lower(hex(randomblob(4))), ?, ?, 'created', date('now')) RETURNING tracking_id, order_id, carrier, status"
+        sql: >
+          INSERT INTO shipments (tracking_id, order_id, carrier, status, created_at)
+          VALUES ('trk_' || lower(hex(randomblob(4))), ?, ?, 'created', date('now'))
+          RETURNING tracking_id, order_id, carrier, status
         on_success: { status: 201, body: "{rows[0]}" }
         on_invalid: { status: 400, body: { error: "invalid_input" } }

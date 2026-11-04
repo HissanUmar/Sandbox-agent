@@ -133,7 +133,8 @@ class Sandbox:
 
     @contextlib.contextmanager
     def run(self):
-        run_dir = tempfile.mkdtemp(prefix="sandbox-")
+        self._run_dir = tempfile.mkdtemp(prefix="sandbox-")
+        run_dir = self._run_dir
         servers = []
         env = {}
         try:

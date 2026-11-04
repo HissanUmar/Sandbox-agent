@@ -1,0 +1,8 @@
+name: cancel_order_101
+env: shop
+db: shop
+input: "Cancel order 101."
+expected_state:
+  orders:
+    - id: 101
+      status: cancelled

@@ -2,7 +2,7 @@
 """Consistency tests for the sandbox.
 
 Run from the project root:
-    python test_sandbox.py
+    python -m pipeline.test_sandbox
 
 Exit code 0 = all pass, 1 = failures.
 No LLM required. Tests the plumbing only: provisioning, persistence,
@@ -15,10 +15,10 @@ import tempfile
 
 import requests
 
-from sandbox import Sandbox, _build_create_table, _run_sql
+from .sandbox import Sandbox, _build_create_table, _run_sql
 
 
-YAML = "pipeline/sandbox.yaml"
+YAML = os.environ.get("SANDBOX_YAML", "environments/shop/sandbox.yaml")
 RESULTS = []
 
 
@@ -60,7 +60,6 @@ def test_provisioning():
         # instead: assert the orders endpoint returns customer_ids in 1..10
         ids = {o["customer_id"] for o in rows}
         assert ids <= set(range(1, 11)), f"unexpected customer_id(s): {ids - set(range(1, 11))}"
-
 
 # ── 2. persistence: cancel → list → absent ──────────────────────
 def test_persistence():
@@ -138,13 +137,16 @@ def test_reset_consistency():
 
 # ── 5. tool errors reach the agent (via _call) ──────────────────
 def test_tool_errors():
-    from agent_tools import _call, cancel_order
+
+
+    from environments.shop._runtime import call
+    from environments.shop.tools import cancel_order
 
     # _call surfaces _status on 4xx
     class FakeResp:
         status_code = 404
         def json(self): return {"error": "not_found"}
-    out = _call(FakeResp())
+    out = call(FakeResp())
     assert out.get("_status") == 404, f"_call dropped status: {out}"
     assert out.get("error") == "not_found", f"_call dropped body: {out}"
 
@@ -152,15 +154,14 @@ def test_tool_errors():
     class OK:
         status_code = 200
         def json(self): return {"ok": True}
-    out = _call(OK())
+    out = call(OK())
     assert "_status" not in out, f"_call added _status on success: {out}"
 
     # a real tool call against a live sandbox: missing order → 404 surfaced
     sb = Sandbox.from_file(YAML)
     with sb.run() as env:
-        import agent_tools
-        agent_tools.configure(env) if hasattr(agent_tools, "configure") else None
-        # the tools read os.environ by default; env is already set by run()
+        from environments.shop import _runtime
+        _runtime.configure(env)
         r = cancel_order.invoke({"order_id": 9999})
         assert isinstance(r, dict), f"cancel_order returned {type(r)}"
         assert r.get("_status") == 404, f"expected 404 for missing order, got: {r}"

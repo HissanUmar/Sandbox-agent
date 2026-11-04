@@ -1,0 +1,9 @@
+name: schedule_appointment_patient_3
+env: hospital
+db: hospital
+input: "Find an available doctor at 2026-11-05T09:00 and schedule an appointment for patient 3."
+expected_state:
+  appointments:
+    - patient_id: 3
+      time: "2026-11-05T09:00"
+      status: scheduled

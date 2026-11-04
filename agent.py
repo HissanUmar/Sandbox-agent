@@ -1,6 +1,5 @@
 # agent.py
 from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
-from pipeline import TOOLS
 from langchain_openai import ChatOpenAI
 from pipeline.sql_tool import reset_retry_guard
 import os
@@ -21,7 +20,7 @@ SYSTEM = (
 
 TRACE = []
 
-def get_llm(bind_tools=None):
+def get_llm(model_tools=None):
     base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1/")
     if not base_url.endswith("/v1/"):
         base_url = base_url.rstrip("/") + "/v1/"
@@ -31,14 +30,14 @@ def get_llm(bind_tools=None):
         api_key=os.getenv("OLLAMA_API_KEY", "ollama"),
         temperature=0,
         streaming=False,
-    ).bind_tools(TOOLS)
+    ).bind_tools(model_tools)
 
-def main(task: str):
+def main(task: str, tools: list, system_prompt: str):
     reset_retry_guard()
     TRACE.clear()
 
-    llm = get_llm(bind_tools=TOOLS)
-    tools_by_name = {t.name: t for t in TOOLS}
+    llm = get_llm(model_tools=tools)
+    tools_by_name = {t.name: t for t in tools}
     messages = [SystemMessage(content=SYSTEM), HumanMessage(content=task)]
 
     for _ in range(12):
