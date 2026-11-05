@@ -82,17 +82,22 @@ def _check_params(ep, request):
     return values, None
 
 
-def _resolve_body(body_tmpl, rows):
+import re
+
+def _resolve_body(body_tmpl, rows, params=None):
+    params = params or {}
     if isinstance(body_tmpl, str):
         if body_tmpl == "{rows}":
             return rows
         if body_tmpl == "{rows[0]}":
             return rows[0] if rows else {}
-        return body_tmpl
+        return re.sub(r"\{(\w+)\}",
+                      lambda m: str(params.get(m.group(1), m.group(0))),
+                      body_tmpl)
     if isinstance(body_tmpl, dict):
-        return {k: _resolve_body(v, rows) for k, v in body_tmpl.items()}
+        return {k: _resolve_body(v, rows, params) for k, v in body_tmpl.items()}
     if isinstance(body_tmpl, list):
-        return [_resolve_body(v, rows) for v in body_tmpl]
+        return [_resolve_body(v, rows, params) for v in body_tmpl]
     return body_tmpl
 
 
@@ -136,7 +141,9 @@ class Sandbox:
         self._run_dir = tempfile.mkdtemp(prefix="sandbox-")
         run_dir = self._run_dir
         servers = []
+        threads = [] 
         env = {}
+        saved_env = dict(os.environ)
         try:
             # ── databases ────────────────────────────────────────
             for name, dbcfg in (self.config.get("databases") or {}).items():
@@ -168,6 +175,7 @@ class Sandbox:
                 th = threading.Thread(target=server.run, daemon=True); th.start()
                 while not server.started: time.sleep(0.02)
                 servers.append(server)
+                threads.append(th)
                 env[f"SB_API_{name.upper()}"] = f"http://127.0.0.1:{port}"
 
             os.environ.update(env)
@@ -175,7 +183,13 @@ class Sandbox:
         finally:
             for s in servers:
                 s.should_exit = True
+            
+            for th in threads:
+                th.join(timeout=2)
             time.sleep(0.1)
+
+            os.environ.clear()
+            os.environ.update(saved_env)
             try:
                 shutil.rmtree(run_dir)
             except Exception as e:
@@ -185,6 +199,7 @@ class Sandbox:
     # ── SQL-backed APIs ──────────────────────────────────────────
     def _build_sql_app(self, apicfg, db_path):
         app = FastAPI()
+
         for ep in apicfg["endpoints"]:
             path = ep["path"]
             method = ep["method"].upper()
@@ -200,15 +215,50 @@ class Sandbox:
                     request._body = {}
 
                 values, err = _check_params(_ep, request)
+                param_map = dict(zip(_ep.get("params", {}).keys(), values))
                 if err:
                     spec = _ep.get("on_invalid", {"status": 400, "body": {"error": "invalid_input"}})
-                    body = _resolve_body(spec["body"], [])
+                    body = _resolve_body(spec["body"], [], param_map)
                     if isinstance(body, dict) and "detail" not in body:
                         body = {**body, "detail": err}
                     return JSONResponse(body, status_code=spec["status"])
 
+                
+                # 3. build param_map once (used by prechecks and final response)
+                param_map = dict(zip(_ep.get("params", {}).keys(), values))
+
+                # 4. PRECHECK — require_exists: 0 rows → on_not_found
+                if "require_exists" in _ep:
+                    pc_keys = _ep.get("precheck_params") or list(_ep.get("params", {}).keys())
+                    pc_values = [param_map[k] for k in pc_keys]
+                    rows, _ = _run_sql(_db, _ep["require_exists"], pc_values)
+                    if not rows:
+                        spec = _ep.get("on_not_found", _ep["on_success"])
+                        return JSONResponse(
+                            _resolve_body(spec["body"], [], param_map),
+                            status_code=spec["status"],
+                        )
+
+                # 5. PRECHECK — require_absent: any row → on_conflict
+                if "require_absent" in _ep:
+                    pc_keys = _ep.get("precheck_params") or list(_ep.get("params", {}).keys())
+                    pc_values = [param_map[k] for k in pc_keys]
+                    rows, _ = _run_sql(_db, _ep["require_absent"], pc_values)
+                    if rows:
+                        spec = _ep.get("on_conflict", _ep["on_success"])
+                        return JSONResponse(
+                            _resolve_body(spec["body"], [], param_map),
+                            status_code=spec["status"],
+                        )
+
+
                 try:
                     rows, affected = _run_sql(_db, _ep["sql"], values)
+                except sqlite3.IntegrityError as e:
+                    return JSONResponse(
+                        {"error": "invalid_reference", "detail": str(e)},
+                        status_code=400,
+                    )
                 except Exception as e:
                     return JSONResponse({"error": "internal_error", "detail": str(e)}, status_code=500)
 
@@ -218,12 +268,16 @@ class Sandbox:
                 if is_returning:
                     key = "on_success"
                 elif affected == 0:
-                    key = "on_not_found" if "on_not_found" in _ep else "on_conflict"
+
+                    if "require_exists" in _ep:
+                        key = "on_conflict" if "on_conflict" in _ep else "on_not_found"
+                    else:
+                        key = "on_not_found" if "on_not_found" in _ep else "on_conflict"
                 else:
                     key = "on_success"
 
                 spec = _ep.get(key) or _ep["on_success"]
-                body = _resolve_body(spec["body"], rows)
+                body = _resolve_body(spec["body"], rows, param_map)
                 return JSONResponse(body, status_code=spec["status"])
 
             app.add_api_route(path, handler, methods=[method])

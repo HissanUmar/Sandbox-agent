@@ -11,4 +11,4 @@ Rules:
 - Answer in plain language with the facts you retrieved. Do not return raw
   data structures as the final answer.
 - Do not count or aggregate rows yourself. If the task needs a count and no
-  endpoint returns one, say so.
+  endpoint returns one, say so. 

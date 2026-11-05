@@ -6,7 +6,7 @@ from ._runtime import api_url, call
 
 
 @tool
-def list_doctors(available_at: str = None) -> list | dict:
+def list_doctors(available_at: str) -> list | dict:
     """List doctors. If available_at is an ISO time (e.g. '2026-11-05T09:00'),
     only returns doctors with no appointment at that time. Returns
     [{id, name, department_id}]."""

@@ -38,7 +38,7 @@ def main(task: str, tools: list, system_prompt: str):
 
     llm = get_llm(model_tools=tools)
     tools_by_name = {t.name: t for t in tools}
-    messages = [SystemMessage(content=SYSTEM), HumanMessage(content=task)]
+    messages = [SystemMessage(content=system_prompt), HumanMessage(content=task)]
 
     for _ in range(12):
         response = llm.invoke(messages)

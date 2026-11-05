@@ -5,14 +5,25 @@ Pure function: validate(config) -> None, or raises ConfigError with a
 precise message naming the offending location. No sqlite, no FastAPI,
 no filesystem. Callable from tests without a running sandbox.
 """
+import re
 
 _ALLOWED_ON = {"on_success", "on_not_found", "on_conflict", "on_invalid"}
 _ALLOWED_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 _ALLOWED_PARAM_SOURCES = {"path", "query", "body"}
 
 
+_SQL_STRING = re.compile(r"'(?:[^']|'')*'")   # single-quoted literals, doubled '' escapes
+_SQL_COMMENT = re.compile(r"--[^\n]*")        # line comments
+
+
 class ConfigError(Exception):
     pass
+
+
+def _count_placeholders(sql):
+    s = _SQL_STRING.sub("''", sql)
+    s = _SQL_COMMENT.sub("", s)
+    return s.count("?")
 
 
 def validate(config: dict) -> None:
@@ -153,6 +164,30 @@ def _validate_sql_endpoint(loc: str, ep: dict) -> None:
     if "on_success" not in ep:
         raise ConfigError(f"{loc}: 'on_success' is required for sql endpoints")
 
+def _validate_sql_references(loc, sql, all_tables):
+    try:
+        ast = sqlglot.parse_one(sql, dialect="sqlite")
+    except sqlglot.errors.ParseError as e:
+        raise ConfigError(f"{loc}.sql: parse error: {e}")
+
+    for table in ast.find_all(exp.Table):
+        name = table.name
+        if name and name not in all_tables:
+            raise ConfigError(
+                f"{loc}.sql: unknown table {name!r}; available: {sorted(all_tables)}"
+            )
+
+    for col in ast.find_all(exp.Column):
+        cname = col.name
+        if not cname:
+            continue
+        # column must exist in at least one table referenced in the query
+        # (simple heuristic; joins across tables are not disambiguated)
+        if not any(cname in tbl_cfg["columns"] for tbl_cfg in all_tables.values()):
+            raise ConfigError(
+                f"{loc}.sql: unknown column {cname!r}; "
+                f"declared columns: {sorted({c for t in all_tables.values() for c in t['columns']})}"
+            )
 
 
 if __name__ == "__main__":

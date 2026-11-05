@@ -1,0 +1,10 @@
+name: duplicate_appointment_must_fail
+env: hospital
+db: hospital
+input: "Call schedule_appointment with patient_id=3, doctor_id=2, time=2026-11-05T09:00. Then call schedule_appointment again with the exact same arguments."
+mode: delta
+expected_state:
+  appointments:
+    - patient_id: 3
+      time: "2026-11-05T09:00"
+      status: scheduled

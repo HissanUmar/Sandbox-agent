@@ -30,7 +30,8 @@ if __name__ == "__main__":
 
         # 3. load the environment's prompt
         with open(f"{env_dir}/prompt.md") as f:
-            system_prompt = f.read()
+            env_prompt = f.read()
+
 
         # 4. run the agent with this environment's tools and prompt
-        agent.main(args.task, tools_mod.TOOLS, system_prompt)
+        agent.main(args.task, tools_mod.TOOLS, env_prompt)

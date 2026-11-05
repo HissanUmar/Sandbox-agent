@@ -90,6 +90,7 @@ apis:
         path: /orders/{id}/cancel
         params:
           id: { type: integer, required: true, min: 1, source: path }
+        require_exists: "SELECT status FROM orders WHERE id = ?"
         sql: "UPDATE orders SET status = 'cancelled' WHERE id = ? AND status IN ('pending','paid')"
         on_success: { status: 200, body: { ok: true } }
         on_not_found: { status: 404, body: { error: "not_found", message: "Order {id} does not exist" } }
